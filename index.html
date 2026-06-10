@@ -245,6 +245,7 @@ input[type=range]{width:100%;accent-color:var(--green)}
     <button class="nav-item" onclick="nav('efficiency')"><i class="ti ti-bulb"></i> Efficiency Tips</button>
     <div class="nav-label">Data</div>
     <button class="nav-item" onclick="nav('importexport')"><i class="ti ti-database-import"></i> Import / Export</button>
+    <button class="nav-item" onclick="nav('crochetsync')"><i class="ti ti-refresh"></i> Crochet Sync</button>
     <button class="nav-item" onclick="nav('guide')"><i class="ti ti-help-circle"></i> How to use</button>
   </nav>
   <div class="sidebar-footer">
@@ -603,6 +604,47 @@ input[type=range]{width:100%;accent-color:var(--green)}
     </div>
   </div>
 </div>
+<!-- CROCHET SYNC -->
+<div id="page-crochetsync" class="page">
+  <div class="page-header"><div><h2>🔄 Crochet Studio Sync</h2><div class="sub">Exchange yarn, projects and patterns with your Crochet Studio app</div></div></div>
+
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1.5rem">
+    <div class="stat-card"><div class="stat-val" id="csync-mats">—</div><div class="stat-label">Fiber/Yarn materials</div></div>
+    <div class="stat-card"><div class="stat-val" id="csync-prods">—</div><div class="stat-label">Crochet products</div></div>
+  </div>
+
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.5rem">
+
+    <div>
+      <h3 style="margin-bottom:.75rem">Export to Crochet Studio</h3>
+      <p style="font-size:13px;color:var(--text-muted);margin-bottom:1rem;line-height:1.6">Packages all Fiber/Yarn materials and crochet products. Load this file in Crochet Studio → Sync → Import.</p>
+      <button class="btn" onclick="cbExportToCrochet()"><i class="ti ti-download"></i> Export Crochet Data</button>
+      <div id="csync-export-result" style="margin-top:.75rem;font-size:13px"></div>
+    </div>
+
+    <div>
+      <h3 style="margin-bottom:.75rem">Import from Crochet Studio</h3>
+      <p style="font-size:13px;color:var(--text-muted);margin-bottom:1rem;line-height:1.6">Paste or load a Crochet Studio export. Yarn → materials, projects → products, patterns saved. Merges by ID.</p>
+      <textarea id="csync-paste" placeholder='Paste Crochet Studio JSON here…' style="width:100%;min-height:90px;font-size:12px;font-family:monospace;padding:.5rem;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);resize:vertical;margin-bottom:.5rem"></textarea>
+      <div style="display:flex;gap:.5rem;flex-wrap:wrap">
+        <button class="btn" onclick="cbImportFromCrochet()"><i class="ti ti-upload"></i> Import & Merge</button>
+        <label class="btn" style="cursor:pointer"><i class="ti ti-file-upload"></i> Load file<input type="file" accept=".json" onchange="cbLoadSyncFile(this)" style="display:none"></label>
+      </div>
+      <div id="csync-import-result" style="margin-top:.75rem;font-size:13px"></div>
+    </div>
+
+  </div>
+
+  <div style="margin-top:1.5rem;padding:1rem;background:var(--surface);border-radius:8px;border:1px solid var(--border)">
+    <strong style="font-size:13px">What syncs:</strong>
+    <ul style="font-size:13px;color:var(--text-muted);margin-top:.5rem;padding-left:1.25rem;line-height:1.9">
+      <li>Yarn stash (Crochet Studio) ↔ Fiber/Yarn materials (CraftBase)</li>
+      <li>Projects (Crochet Studio) ↔ Crochet products (CraftBase)</li>
+      <li>Patterns (Crochet Studio) → stored in CraftBase patterns array</li>
+      <li>Records are matched by ID — duplicates are updated, not doubled</li>
+    </ul>
+  </div>
+</div>
 
 </main>
 </div>
@@ -837,13 +879,13 @@ function nav(page){
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
   document.getElementById('page-'+page).classList.add('active');
-  const map={dashboard:'dashboard',materials:'materials',products:'products',recipes:'recipes',processes:'processes',timer:'time tracker',orders:'orders',expenses:'expenses',machines:'machines',pricing:'pricing',tax:'tax',reports:'reports',craftspace:'craft space',efficiency:'efficiency',importexport:'import',guide:'how to'};
+  const map={dashboard:'dashboard',materials:'materials',products:'products',recipes:'recipes',processes:'processes',timer:'time tracker',orders:'orders',expenses:'expenses',machines:'machines',pricing:'pricing',tax:'tax',reports:'reports',craftspace:'craft space',efficiency:'efficiency',importexport:'import',crochetsync:'crochet sync',guide:'how to'};
   document.querySelectorAll('.nav-item').forEach(n=>{
     const txt=n.textContent.trim().toLowerCase();
     const key=(map[page]||page).toLowerCase();
     if(txt.includes(key.slice(0,5)))n.classList.add('active');
   });
-  const renders={dashboard:renderDash,materials:()=>renderMats(''),products:()=>renderProds(''),recipes:renderRecs,processes:renderProcs,timer:renderTimer,orders:renderOrds,expenses:renderExps,machines:renderMachs,tax:renderTax,reports:renderRpts,craftspace:renderCraftSpace,efficiency:()=>showTips('glowforge',document.querySelector('.tab-btn'))};
+  const renders={dashboard:renderDash,materials:()=>renderMats(''),products:()=>renderProds(''),recipes:renderRecs,processes:renderProcs,timer:renderTimer,orders:renderOrds,expenses:renderExps,machines:renderMachs,tax:renderTax,reports:renderRpts,craftspace:renderCraftSpace,efficiency:()=>showTips('glowforge',document.querySelector('.tab-btn')),crochetsync:renderCrochetSync};
   if(renders[page])renders[page]();
 }
 
@@ -1676,7 +1718,149 @@ function parseCSVLine(line){const r=[];let cur='',inQ=false;for(let i=0;i<line.l
 // ============================================================
 // INIT
 // ============================================================
-renderDash();
+// CROCHET STUDIO SYNC
+// ============================================================
+function renderCrochetSync() {
+  const mats = db.materials.filter(m => (m.cat||'').toLowerCase().includes('yarn') || (m.cat||'').toLowerCase().includes('fiber'));
+  const prods = db.products.filter(p => (p.craft||'') === 'crochet');
+  const mc = document.getElementById('csync-mats');
+  const pc = document.getElementById('csync-prods');
+  if (mc) mc.textContent = mats.length;
+  if (pc) pc.textContent = prods.length;
+}
+
+function cbExportToCrochet() {
+  const mats = db.materials.filter(m => (m.cat||'').toLowerCase().includes('yarn') || (m.cat||'').toLowerCase().includes('fiber') || (m.cat||'').toLowerCase().includes('wool') || (m.cat||'').toLowerCase().includes('thread'));
+  const prods = db.products.filter(p => (p.craft||'') === 'crochet');
+  const patterns = db.patterns || [];
+
+  // Map materials → Crochet Studio yarn format
+  const yarns = mats.map(m => ({
+    id: m.id,
+    name: m.name,
+    weight: m._weight || 'Worsted (4)',
+    fiber: m.notes ? m.notes.split('|')[0].trim() : '',
+    meterage: parseInt((m.notes||'').match(/(\d+)m\/skein/)?.[1]) || 0,
+    skeins: m.qty || 1,
+    color: m._color || '#D4859A',
+    notes: m.notes || '',
+  }));
+
+  // Map products → Crochet Studio project format
+  const projects = prods.map(p => ({
+    id: p.id,
+    name: p.name,
+    type: p.cat || 'Other',
+    hook: p._hook || '5.0mm',
+    yarnWeight: p._yarnWeight || 'Worsted (4)',
+    notes: p.desc || '',
+    targetRows: p._targetRows || 0,
+    rows: p._rows || 0,
+    status: p._status || (p.madeSoFar > 0 ? 'finished' : 'WIP'),
+    created: Date.now(),
+  }));
+
+  const payload = {
+    craftbase_sync: true,
+    source: 'craftbase_pro',
+    exported: new Date().toISOString(),
+    yarns,
+    projects,
+    patterns,
+  };
+
+  const json = JSON.stringify(payload, null, 2);
+  const blob = new Blob([json], {type: 'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'craftbase-crochet-sync-' + new Date().toISOString().slice(0,10) + '.json';
+  a.click();
+  URL.revokeObjectURL(url);
+  navigator.clipboard.writeText(json).catch(()=>{});
+  document.getElementById('csync-export-result').innerHTML = '<span style="color:var(--success)">✅ Exported '+yarns.length+' yarns + '+projects.length+' projects. File downloaded.</span>';
+}
+
+function cbImportFromCrochet() {
+  const raw = document.getElementById('csync-paste').value.trim();
+  if (!raw) { document.getElementById('csync-import-result').innerHTML = '<span style="color:var(--danger)">⚠️ Paste Crochet Studio JSON first.</span>'; return; }
+  try { cbProcessCrochetImport(JSON.parse(raw)); }
+  catch(e) { document.getElementById('csync-import-result').innerHTML = '<span style="color:var(--danger)">✗ JSON error: '+e.message+'</span>'; }
+}
+
+function cbLoadSyncFile(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = e => { try { cbProcessCrochetImport(JSON.parse(e.target.result)); } catch(err) { document.getElementById('csync-import-result').innerHTML = '<span style="color:var(--danger)">✗ ' + err.message + '</span>'; }};
+  reader.readAsText(file);
+}
+
+function cbProcessCrochetImport(data) {
+  let matAdded = 0, matUpdated = 0, prodAdded = 0, prodUpdated = 0, patAdded = 0;
+
+  // yarns → materials
+  const yarns = data.yarns || (Array.isArray(data.materials) ? data.materials : []);
+  yarns.forEach(y => {
+    const idx = db.materials.findIndex(m => m.id === y.id);
+    const mapped = {
+      id: y.id,
+      name: y.name,
+      cat: 'Fiber / Yarn',
+      qty: y.skeins || 1,
+      unit: 'skein',
+      cost: 0,
+      low: 1,
+      supp: '', where: '', url: '',
+      notes: [y.fiber, y.meterage ? y.meterage+'m/skein' : '', y.notes].filter(Boolean).join(' | '),
+      _color: y.color,
+      _weight: y.weight,
+    };
+    if (idx >= 0) { db.materials[idx] = {...db.materials[idx], ...mapped}; matUpdated++; }
+    else { db.materials.push(mapped); matAdded++; }
+  });
+
+  // projects → products
+  const projects = data.projects || (Array.isArray(data.products) ? data.products.filter(p=>(p.craft||'')===('crochet')) : []);
+  projects.forEach(p => {
+    const idx = db.products.findIndex(pr => pr.id === p.id);
+    const mapped = {
+      id: p.id,
+      name: p.name,
+      sku: '',
+      craft: 'crochet',
+      cat: p.type || 'Crochet',
+      price: 0,
+      platform: '',
+      desc: p.notes || '',
+      photo: '',
+      madeSoFar: p.status === 'finished' ? 1 : 0,
+      _hook: p.hook,
+      _yarnWeight: p.yarnWeight,
+      _rows: p.rows,
+      _targetRows: p.targetRows,
+      _status: p.status,
+    };
+    if (idx >= 0) { db.products[idx] = {...db.products[idx], ...mapped}; prodUpdated++; }
+    else { db.products.push(mapped); prodAdded++; }
+  });
+
+  // patterns
+  if (Array.isArray(data.patterns)) {
+    if (!db.patterns) db.patterns = [];
+    data.patterns.forEach(p => {
+      const idx = db.patterns.findIndex(pt => pt.id === p.id);
+      if (idx >= 0) db.patterns[idx] = p;
+      else { db.patterns.push(p); patAdded++; }
+    });
+  }
+
+  persist();
+  renderCrochetSync();
+  document.getElementById('csync-import-result').innerHTML =
+    `<span style="color:var(--success)">✅ Done! Materials: +${matAdded} added, ${matUpdated} updated · Products: +${prodAdded} added, ${prodUpdated} updated · Patterns: +${patAdded}</span>`;
+}
+
 showTips('glowforge', null);
 // Pre-fill tax settings
 const ts=db.taxSettings||{};
