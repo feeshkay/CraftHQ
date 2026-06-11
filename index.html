@@ -245,6 +245,7 @@ input[type=range]{width:100%;accent-color:var(--green)}
     <button class="nav-item" onclick="nav('efficiency')"><i class="ti ti-bulb"></i> Efficiency Tips</button>
     <div class="nav-label">Data</div>
     <button class="nav-item" onclick="nav('importexport')"><i class="ti ti-database-import"></i> Import / Export</button>
+    <button class="nav-item" onclick="nav('assetlibrary')"><i class="ti ti-photo-library"></i> Asset Library</button>
     <button class="nav-item" onclick="nav('crochetsync')"><i class="ti ti-refresh"></i> Crochet Sync</button>
     <button class="nav-item" onclick="nav('guide')"><i class="ti ti-help-circle"></i> How to use</button>
   </nav>
@@ -645,6 +646,42 @@ input[type=range]{width:100%;accent-color:var(--green)}
     </ul>
   </div>
 </div>
+<!-- ASSET LIBRARY -->
+<div id="page-assetlibrary" class="page">
+  <div class="page-header">
+    <div><h2>📁 Asset Library</h2><div class="sub">SVGs, images, fonts, patterns — stored locally, unlimited size</div></div>
+    <label class="btn" style="cursor:pointer"><i class="ti ti-upload"></i> Upload Files
+      <input type="file" id="asset-upload-input" multiple accept="*/*" onchange="uploadAssets(this)" style="display:none">
+    </label>
+  </div>
+
+  <!-- Filter bar -->
+  <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:1rem;align-items:center">
+    <input type="search" id="asset-search" placeholder="Search files…" oninput="renderAssetLibrary()" style="flex:1;min-width:160px;padding:.4rem .75rem;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);font-size:13px">
+    <div style="display:flex;gap:.25rem;flex-wrap:wrap" id="asset-cat-filters">
+      <button class="btn btn-sm active" data-cat="all" onclick="setAssetCat('all',this)">All</button>
+      <button class="btn btn-sm" data-cat="svg" onclick="setAssetCat('svg',this)">SVG</button>
+      <button class="btn btn-sm" data-cat="image" onclick="setAssetCat('image',this)">Images</button>
+      <button class="btn btn-sm" data-cat="font" onclick="setAssetCat('font',this)">Fonts</button>
+      <button class="btn btn-sm" data-cat="pattern" onclick="setAssetCat('pattern',this)">Patterns</button>
+      <button class="btn btn-sm" data-cat="other" onclick="setAssetCat('other',this)">Other</button>
+    </div>
+  </div>
+
+  <!-- Stats bar -->
+  <div style="display:flex;gap:1rem;margin-bottom:1rem;font-size:13px;color:var(--text2)" id="asset-stats"></div>
+
+  <!-- Upload drop zone -->
+  <div id="asset-drop-zone" style="border:2px dashed var(--border);border-radius:10px;padding:2rem;text-align:center;margin-bottom:1rem;color:var(--text2);font-size:14px;transition:border-color .2s;display:none">
+    Drop files here to upload
+  </div>
+
+  <!-- Grid -->
+  <div id="asset-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:.75rem"></div>
+
+  <!-- Upload progress -->
+  <div id="asset-upload-progress" style="margin-top:1rem"></div>
+</div>
 
 </main>
 </div>
@@ -809,8 +846,59 @@ input[type=range]{width:100%;accent-color:var(--green)}
 // DATA STORE
 // ============================================================
 const SK = 'craftbase_pro_v3';
-function load(){try{const d=localStorage.getItem(SK);return d?JSON.parse(d):seed();}catch{return seed();}}
-function persist(){localStorage.setItem(SK,JSON.stringify(db));}
+const IDB_NAME = 'craftbase_idb', IDB_VER = 1;
+const IDB_STORE_KV = 'kv', IDB_STORE_ASSETS = 'assets';
+let _idb = null;
+
+function idbOpen() {
+  if (_idb) return Promise.resolve(_idb);
+  return new Promise((res, rej) => {
+    const req = indexedDB.open(IDB_NAME, IDB_VER);
+    req.onupgradeneeded = e => {
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains(IDB_STORE_KV)) db.createObjectStore(IDB_STORE_KV);
+      if (!db.objectStoreNames.contains(IDB_STORE_ASSETS)) {
+        const s = db.createObjectStore(IDB_STORE_ASSETS, {keyPath:'id'});
+        s.createIndex('cat','cat',{unique:false});
+        s.createIndex('name','name',{unique:false});
+      }
+    };
+    req.onsuccess = e => { _idb = e.target.result; res(_idb); };
+    req.onerror = rej;
+  });
+}
+function idbKvGet(key) {
+  return idbOpen().then(db => new Promise((res,rej) => {
+    const r = db.transaction(IDB_STORE_KV,'readonly').objectStore(IDB_STORE_KV).get(key);
+    r.onsuccess = () => res(r.result);
+    r.onerror = rej;
+  }));
+}
+function idbKvSet(key, val) {
+  return idbOpen().then(db => new Promise((res,rej) => {
+    const tx = db.transaction(IDB_STORE_KV,'readwrite');
+    tx.objectStore(IDB_STORE_KV).put(val, key);
+    tx.oncomplete = res; tx.onerror = rej;
+  }));
+}
+
+function load(){
+  // Sync load from localStorage as fallback, async upgrades to IDB
+  try{const d=localStorage.getItem(SK);
+    const data = d?JSON.parse(d):seed();
+    // Migrate to IDB in background
+    idbKvSet(SK, data).then(() => {
+      if (d) localStorage.removeItem(SK); // clean up after migrate
+    }).catch(()=>{});
+    return data;
+  }catch{return seed();}
+}
+function persist(){
+  idbKvSet(SK, db).catch(()=>{
+    // fallback to localStorage if IDB fails
+    try{localStorage.setItem(SK,JSON.stringify(db));}catch(e){}
+  });
+}
 function uid(){return Date.now().toString(36)+Math.random().toString(36).slice(2,5);}
 function fmt(n){return '$'+Number(n||0).toFixed(2);}
 function fmtN(n){return Number(n||0).toLocaleString(undefined,{maximumFractionDigits:2});}
@@ -879,13 +967,13 @@ function nav(page){
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
   document.getElementById('page-'+page).classList.add('active');
-  const map={dashboard:'dashboard',materials:'materials',products:'products',recipes:'recipes',processes:'processes',timer:'time tracker',orders:'orders',expenses:'expenses',machines:'machines',pricing:'pricing',tax:'tax',reports:'reports',craftspace:'craft space',efficiency:'efficiency',importexport:'import',crochetsync:'crochet sync',guide:'how to'};
+  const map={dashboard:'dashboard',materials:'materials',products:'products',recipes:'recipes',processes:'processes',timer:'time tracker',orders:'orders',expenses:'expenses',machines:'machines',pricing:'pricing',tax:'tax',reports:'reports',craftspace:'craft space',efficiency:'efficiency',importexport:'import',assetlibrary:'asset library',crochetsync:'crochet sync',guide:'how to'};
   document.querySelectorAll('.nav-item').forEach(n=>{
     const txt=n.textContent.trim().toLowerCase();
     const key=(map[page]||page).toLowerCase();
     if(txt.includes(key.slice(0,5)))n.classList.add('active');
   });
-  const renders={dashboard:renderDash,materials:()=>renderMats(''),products:()=>renderProds(''),recipes:renderRecs,processes:renderProcs,timer:renderTimer,orders:renderOrds,expenses:renderExps,machines:renderMachs,tax:renderTax,reports:renderRpts,craftspace:renderCraftSpace,efficiency:()=>showTips('glowforge',document.querySelector('.tab-btn')),crochetsync:renderCrochetSync};
+  const renders={dashboard:renderDash,materials:()=>renderMats(''),products:()=>renderProds(''),recipes:renderRecs,processes:renderProcs,timer:renderTimer,orders:renderOrds,expenses:renderExps,machines:renderMachs,tax:renderTax,reports:renderRpts,craftspace:renderCraftSpace,efficiency:()=>showTips('glowforge',document.querySelector('.tab-btn')),assetlibrary:renderAssetLibrary,crochetsync:renderCrochetSync};
   if(renders[page])renders[page]();
 }
 
@@ -1865,6 +1953,181 @@ showTips('glowforge', null);
 // Pre-fill tax settings
 const ts=db.taxSettings||{};
 ['rate','se','fed','state','home','year'].forEach(f=>{const el=document.getElementById('tax-'+f);if(el&&ts[f]!==undefined)el.value=ts[f];});
+
+// ============================================================
+// ASSET LIBRARY — IndexedDB file storage (unlimited)
+// ============================================================
+let assetCatFilter = 'all';
+
+const ASSET_CATS = {
+  svg:     { exts: ['.svg'],                          label: 'SVG',     color: '#D4859A', bg: '#F5DDE5' },
+  image:   { exts: ['.png','.jpg','.jpeg','.gif','.webp','.bmp','.tiff','.heic'], label: 'Image', color: '#7A9E87', bg: '#D6E8DC' },
+  font:    { exts: ['.ttf','.otf','.woff','.woff2'], label: 'Font',    color: '#8A7AC5', bg: '#EBE6F5' },
+  pattern: { exts: ['.pdf','.ai','.eps','.dxf','.cricut','.gcode','.nc','.fcm'], label: 'Pattern', color: '#C5955A', bg: '#F5E8D6' },
+  other:   { exts: [],                               label: 'Other',   color: '#8A8480', bg: '#F0EBE1' },
+};
+
+function getAssetCat(name) {
+  const ext = ('.' + name.split('.').pop()).toLowerCase();
+  for (const [cat, info] of Object.entries(ASSET_CATS)) {
+    if (cat !== 'other' && info.exts.includes(ext)) return cat;
+  }
+  return 'other';
+}
+
+function assetIdbGetAll() {
+  return idbOpen().then(db => new Promise((res, rej) => {
+    const all = [];
+    const cur = db.transaction(IDB_STORE_ASSETS,'readonly').objectStore(IDB_STORE_ASSETS).openCursor();
+    cur.onsuccess = e => {
+      const c = e.target.result;
+      if (c) { all.push(c.value); c.continue(); }
+      else res(all);
+    };
+    cur.onerror = rej;
+  }));
+}
+function assetIdbPut(asset) {
+  return idbOpen().then(db => new Promise((res,rej) => {
+    const tx = db.transaction(IDB_STORE_ASSETS,'readwrite');
+    tx.objectStore(IDB_STORE_ASSETS).put(asset);
+    tx.oncomplete = res; tx.onerror = rej;
+  }));
+}
+function assetIdbDelete(id) {
+  return idbOpen().then(db => new Promise((res,rej) => {
+    const tx = db.transaction(IDB_STORE_ASSETS,'readwrite');
+    tx.objectStore(IDB_STORE_ASSETS).delete(id);
+    tx.oncomplete = res; tx.onerror = rej;
+  }));
+}
+
+function setAssetCat(cat, el) {
+  assetCatFilter = cat;
+  document.querySelectorAll('#asset-cat-filters .btn').forEach(b => b.classList.remove('active'));
+  if (el) el.classList.add('active');
+  renderAssetLibrary();
+}
+
+function renderAssetLibrary() {
+  assetIdbGetAll().then(assets => {
+    const search = (document.getElementById('asset-search')?.value || '').toLowerCase();
+    let filtered = assets;
+    if (assetCatFilter !== 'all') filtered = filtered.filter(a => a.cat === assetCatFilter);
+    if (search) filtered = filtered.filter(a => a.name.toLowerCase().includes(search));
+    filtered.sort((a,b) => b.uploaded - a.uploaded);
+
+    // Stats
+    const statsEl = document.getElementById('asset-stats');
+    const totalSize = assets.reduce((s,a) => s + (a.size||0), 0);
+    const fmt = b => b > 1048576 ? (b/1048576).toFixed(1)+'MB' : b > 1024 ? (b/1024).toFixed(0)+'KB' : b+'B';
+    if (statsEl) statsEl.innerHTML = `<span>${assets.length} files</span><span>•</span><span>${fmt(totalSize)} used</span>`;
+
+    // Grid
+    const grid = document.getElementById('asset-grid');
+    if (!grid) return;
+    if (!filtered.length) {
+      grid.innerHTML = `<div style="grid-column:1/-1;text-align:center;padding:3rem;color:var(--text2);font-size:14px">${assets.length ? 'No files match this filter.' : 'No files yet — click Upload Files to add your first asset.'}</div>`;
+      return;
+    }
+
+    grid.innerHTML = filtered.map(a => {
+      const catInfo = ASSET_CATS[a.cat] || ASSET_CATS.other;
+      const isImg = a.cat === 'image' || a.cat === 'svg';
+      const preview = isImg
+        ? `<div style="height:90px;display:flex;align-items:center;justify-content:center;overflow:hidden;border-radius:6px;background:#f8f8f8;margin-bottom:8px"><img src="${a.data}" style="max-width:100%;max-height:88px;object-fit:contain" alt="${a.name}" loading="lazy"></div>`
+        : `<div style="height:90px;display:flex;align-items:center;justify-content:center;font-size:36px;margin-bottom:8px">${a.cat==='font'?'Aa':a.cat==='pattern'?'📐':'📄'}</div>`;
+      const fmt2 = b => b > 1048576 ? (b/1048576).toFixed(1)+'MB' : b > 1024 ? (b/1024).toFixed(0)+'KB' : b+'B';
+      return `<div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:10px;position:relative;overflow:hidden">
+        <div style="position:absolute;top:8px;right:8px;background:${catInfo.bg};color:${catInfo.color};font-size:9px;font-weight:700;padding:2px 6px;border-radius:4px;letter-spacing:.3px">${catInfo.label}</div>
+        ${preview}
+        <div style="font-size:12px;font-weight:600;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-bottom:2px" title="${a.name}">${a.name}</div>
+        <div style="font-size:11px;color:var(--text2);margin-bottom:8px">${fmt2(a.size||0)}</div>
+        <div style="display:flex;gap:4px">
+          <button class="btn btn-sm" style="flex:1;font-size:11px;padding:4px 6px" onclick="downloadAsset('${a.id}')">⬇ Save</button>
+          <button class="btn btn-sm" style="flex:1;font-size:11px;padding:4px 6px;color:var(--danger,#e53);border-color:var(--danger,#e53)" onclick="deleteAsset('${a.id}')">✕</button>
+        </div>
+        ${a.cat==='image'||a.cat==='svg' ? `<button class="btn btn-sm" style="width:100%;margin-top:4px;font-size:11px;padding:4px" onclick="copyAssetData('${a.id}')">📋 Copy data URL</button>` : ''}
+      </div>`;
+    }).join('');
+  });
+}
+
+function uploadAssets(input) {
+  const files = Array.from(input.files);
+  if (!files.length) return;
+  const prog = document.getElementById('asset-upload-progress');
+  if (prog) prog.innerHTML = `<div style="font-size:13px;color:var(--text2)">Uploading ${files.length} file${files.length>1?'s':''}…</div>`;
+  let done = 0;
+  files.forEach(file => {
+    const reader = new FileReader();
+    reader.onload = e => {
+      const asset = {
+        id: 'a_' + Date.now() + '_' + Math.random().toString(36).slice(2,7),
+        name: file.name,
+        cat: getAssetCat(file.name),
+        size: file.size,
+        type: file.type,
+        data: e.target.result, // base64 data URL
+        uploaded: Date.now(),
+        tags: '',
+      };
+      assetIdbPut(asset).then(() => {
+        done++;
+        if (done === files.length) {
+          if (prog) prog.innerHTML = `<div style="font-size:13px;color:var(--success,#4F7360)">✅ ${done} file${done>1?'s':''} uploaded!</div>`;
+          renderAssetLibrary();
+          setTimeout(() => { if (prog) prog.innerHTML = ''; }, 3000);
+        }
+      });
+    };
+    reader.readAsDataURL(file);
+  });
+  input.value = '';
+}
+
+function downloadAsset(id) {
+  assetIdbGetAll().then(assets => {
+    const a = assets.find(x => x.id === id);
+    if (!a) return;
+    const link = document.createElement('a');
+    link.href = a.data;
+    link.download = a.name;
+    link.click();
+  });
+}
+
+function deleteAsset(id) {
+  if (!confirm('Delete this file from your library?')) return;
+  assetIdbDelete(id).then(() => renderAssetLibrary());
+}
+
+function copyAssetData(id) {
+  assetIdbGetAll().then(assets => {
+    const a = assets.find(x => x.id === id);
+    if (!a) return;
+    navigator.clipboard.writeText(a.data).then(() => toast('Data URL copied!')).catch(() => toast('Copy failed — try a different browser'));
+  });
+}
+
+// Drag-and-drop support
+document.addEventListener('DOMContentLoaded', () => {
+  const dz = document.getElementById('asset-drop-zone');
+  const page = document.getElementById('page-assetlibrary');
+  if (!dz || !page) return;
+  page.addEventListener('dragover', e => { e.preventDefault(); dz.style.display='block'; dz.style.borderColor='var(--green)'; });
+  page.addEventListener('dragleave', e => { if (!page.contains(e.relatedTarget)) { dz.style.display='none'; } });
+  page.addEventListener('drop', e => {
+    e.preventDefault();
+    dz.style.display = 'none';
+    const files = Array.from(e.dataTransfer.files);
+    if (!files.length) return;
+    // Simulate file input
+    const fakeInput = { files };
+    uploadAssets(fakeInput);
+  });
+});
+
 </script>
 </body>
 </html>
